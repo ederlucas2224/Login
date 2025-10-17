@@ -1,0 +1,93 @@
+﻿@page "/login"
+@inject AuthService AuthService
+@inject Blazored.LocalStorage.ILocalStorageService LocalStorage
+@inject NavigationManager Navigation
+
+<h3>Login</h3>
+
+@if (!string.IsNullOrEmpty(Token))
+{
+    <div class="alert alert-success">
+        <strong>Usuario:</strong> @LoggedUser
+        <strong>Rol:</strong> @LoggedRol
+    </div>
+}
+else if (Error)
+{
+    <div class="alert alert-danger">
+        Usuario o contraseña incorrectos.
+    </div>
+}
+
+<EditForm id="Form" Model="Credentials" OnValidSubmit="HandleLogin">
+    <InputText @bind-Value="Credentials.Username" placeholder="Usuario" />
+    <InputText @bind-Value="Credentials.Password" type="password" placeholder="Contraseña" />
+    <button type="submit">Login</button>
+</EditForm>
+
+@code {
+    private UserCredentials Credentials = new();
+    private string Token = string.Empty;
+    private bool Error = false;
+    private string LoggedUser = string.Empty;
+    private string LoggedRol = string.Empty;
+    private System.Timers.Timer tokenTimer;
+
+    private async Task HandleLogin()
+    {
+        Error = false;
+        if (AuthService.Login(Credentials.Username, Credentials.Password))
+        {
+            Token = AuthService.GetToken();
+            var expiration = AuthService.GetTokenExpiration();
+            LoggedUser = Credentials.Username;
+            LoggedRol = "Programador";
+            await LocalStorage.SetItemAsync("token", Token);
+            await LocalStorage.SetItemAsync("tokenExpiration", expiration);
+            await LocalStorage.SetItemAsync("loggedUser", LoggedUser);
+            StartTokenTimer(expiration);
+        }
+        else
+        {
+            Error = true;
+        }
+    }
+
+    private void StartTokenTimer(DateTime? expiration)
+    {
+        if (expiration.HasValue)
+        {
+            var remaining = expiration.Value - DateTime.UtcNow;
+            if (remaining.TotalMilliseconds > 0)
+            {
+                tokenTimer = new System.Timers.Timer(remaining.TotalMilliseconds);
+                tokenTimer.Elapsed += async (s, e) =>
+                {
+                    await LocalStorage.RemoveItemAsync("token");
+                    await LocalStorage.RemoveItemAsync("tokenExpiration");
+                    await LocalStorage.RemoveItemAsync("loggedUser");
+                    tokenTimer.Dispose();
+                    Token = null;
+                    LoggedUser = null;
+                    Navigation.NavigateTo("/login", true);
+                    StateHasChanged();
+                };
+                tokenTimer.AutoReset = false;
+                tokenTimer.Start();
+            }
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var token = await LocalStorage.GetItemAsync<string>("token");
+        var expiration = await LocalStorage.GetItemAsync<DateTime?>("tokenExpiration");
+        var user = await LocalStorage.GetItemAsync<string>("loggedUser");
+        if (!string.IsNullOrEmpty(token) && expiration.HasValue && expiration > DateTime.UtcNow)
+        {
+            Token = token;
+            LoggedUser = user;
+            StartTokenTimer(expiration);
+        }
+    }
+}
